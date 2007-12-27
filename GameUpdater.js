@@ -1,5 +1,7 @@
+
 function GameUpdater(url)
 {
+	
 	function GameUpdaterException(msg)
 	{
 			this.message = msg;
@@ -12,7 +14,7 @@ function GameUpdater(url)
 	this.versionFile = "version";
 		
 	// Progress callback. Hook into this to receive feedback from the updater.
-	// (int progress, string working_on) => void
+	// (float progress, string information) => void
 	this.onProgress = null;	
 	
 	// On version corrupt. Return true if you want the updater to simply update the entire game, false to fail.
@@ -35,10 +37,11 @@ function GameUpdater(url)
 		
 		for (var i = 0; i < localVersionData.length; i++)
 		{
+			if (localVersionData[i] == "") continue;
 			localVersionInfo[localVersionData[i].substr(0, localVersionData[i].indexOf("="))] = localVersionData[i].substr(localVersionData[i].indexOf("=") + 1);
 		}
 	
-		if (!localVersionInfo['version'] || !localVersionInfo['dispVersion'])
+		if (!localVersionInfo['version'] || !localVersionInfo['disp_version'])
 		{
 			// The version data seems to be missing.
 			// Assume our copy is corrupt.
@@ -46,7 +49,7 @@ function GameUpdater(url)
 			{
 				// Update the entire game.
 				localVersionInfo['version'] = -1;
-				localVersionInfo['dispversion'] = "";
+				localVersionInfo['disp_version'] = "";
 			}
 			else
 			{
@@ -59,23 +62,24 @@ function GameUpdater(url)
 			// Clean up the vars.
 			localVersionInfo['version'] = parseInt(localVersionInfo['version']);
 		}
-	
+		
 		this.onProgress && this.onProgress(0, "Checking remote version");
 	
 		// Find out what the available version is from the server.
 		remoteVersionInfo = getRemoteVersionInfo();
+		
 		if (remoteVersionInfo['version'] > localVersionInfo['version'])
 		{
 			if (this.onVersionAvailable && this.onVersionAvailable(remoteVersionInfo))
 			{
-				performUpdate();
+				return this.performUpdate() && this.writeVersion(remoteVersionInfo);
 			}
 			else
 			{
 				// No checks, always update.
 				if (!this.onVersionAvailable)
 				{
-					performUpdate();
+					return this.performUpdate() && this.writeVersion(remoteVersionInfo);
 				}
 				else
 				{
@@ -89,14 +93,57 @@ function GameUpdater(url)
 		}
 	}
 	
-	function fileExists(file)
+	this.writeVersion = function(versionInfo)
 	{
-		// TODO: implement this
-		return false;
+		var versionData = "";
+		for (var i in versionInfo)
+		{
+			if (versionInfo[i] == "") continue;
+			versionData += i + "=" + versionInfo[i] + "\r\n";
+		}
+		var f = OpenRawFile(this.versionFile, true);
+		f.write(CreateByteArrayFromString(versionData));
+		f.close();
+		return true;
 	}
 	
-	function performUpdate()
+  function fileExists(file)
 	{
+		var base = "./";
+		var dirs = GetDirectoryList(base);
+		var file_path_split = file.split("/");
+		for (var i = 0; i < file_path_split.length - 1; i++)
+		{
+			var found_dir = false;
+			for (var j = 0; j < dirs.length; j++)
+			{
+				if (dirs[j] == file_path_split[i])
+				{
+					found_dir = true;
+					break;
+				}
+			}
+			if (!found_dir) return false;
+			base += file_path_split[i] + "/";
+			dirs = GetDirectoryList(base);
+		}
+		var files = GetFileList(base);
+		var found_file = false;
+		var filename = file_path_split.pop();
+		for (var i = 0; i < files.length; i++)
+		{
+			if (files[i] == filename)
+			{
+				found_file = true;
+				break;
+			}
+		}
+		return found_file;
+	}
+	
+	this.performUpdate = function()
+	{
+		this.onProgress && this.onProgress(0, "Performing update");
 		// Get the hashes, so we know what files need updating.
 		var hashes = getHashes();
 		
@@ -104,11 +151,14 @@ function GameUpdater(url)
 		var requires_update = [];
 		for (var file in hashes)
 		{
+			if (file == "") continue;
 			if (fileExists(file))
 			{
 				var localHash = HashFromFile("../" + file);
 				if (hashes[file] != localHash)
+				{
 					requires_update.push(file);
+				}
 			}
 			else
 			{
@@ -116,13 +166,26 @@ function GameUpdater(url)
 			}
 		}
 		
+		for (var i = 0; i < requires_update.length; i++)
+		{
+			var file_path = requires_update[i];
+			this.onProgress && this.onProgress((i / requires_update.length) * 100, "Updating " + file_path);
+			var f = OpenRawFile("../" + file_path, true);
+			var file_req = new HttpRequest(url + "/get/" + file_path, "GET");
+			file_req.send();
+			var data = file_req.readAll();
+			f.write(data);
+			file_req.close();
+			f.close();
+		}
+		return true;
 	}
 	
 	function getHashes()
 	{
 		try
 		{
-			var request = new HttpRequest(url + "/get/hashes", "GET");
+			var request = new HttpRequest(url + "/info/hashes", "GET");
 			request.send();
 			var hashesData = CreateStringFromByteArray(request.readAll()).split(/\r?\n/);
 			request.close();
@@ -144,7 +207,7 @@ function GameUpdater(url)
 	{
 		try
 		{
-			var request = new HttpRequest(url + "/get/version", "GET");
+			var request = new HttpRequest(url + "/info/version", "GET");
 			request.send();
 			var remoteVersionData = CreateStringFromByteArray(request.readAll()).split(/\r?\n/);
 			request.close();
