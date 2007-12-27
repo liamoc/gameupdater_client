@@ -89,7 +89,7 @@ function GameUpdater(url)
 		}
 		else
 		{
-			return true;
+			return false;
 		}
 	}
 	
